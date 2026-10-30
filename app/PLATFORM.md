@@ -35,7 +35,10 @@ input. Filter requires saved enabled `physical` rules, with numeric evdev codes
 uinput and withholds configured down/up/repeat events; actions execute on down.
 Socket closure releases the grab. The interception switch saves its enabled state
 and selected remote in the owner’s persistent remap store. Startup and helper
-disconnections retry the saved policy every five seconds once the adapter is ready.
+disconnections retry the saved policy every second once the adapter is ready.
+Each helper runs in its own transient systemd unit so a standby that stops sdbd
+does not release the grab; if a unit helper never authenticates, the next attempt
+uses the detached start.
 Unique device names allow event nodes to change after reboot; ambiguous names
 require the saved node to match. Editing rules releases the grab and then reapplies
 the saved policy with the current enabled physical rules. Observe mode temporarily

@@ -25,6 +25,21 @@ assert.equal(devices('N: Name="panel key device"\nH: Handlers=event3\n')[0].sele
   await assert.rejects(bridge.start('Smart Control','filter',[]),/physical rule/);
   bad=true;await assert.rejects(bridge.start('Smart Control','observe',[]),/authentication/);assert.equal(bridge.status().policy.mode,'off');
   assert.equal(commands.filter(x=>x.includes('nohup')).length,2);
+  // The helper must run in its own transient unit so a standby does not take the grab with it,
+  // and the detached start must stay as the fallback when systemd-run is unavailable.
+  const launches=commands.filter(x=>x.includes('systemd-run'));
+  assert.equal(launches.length,2);
+  assert.ok(launches.every(x=>x.includes('systemd-run --unit=vetro-input-event4 --collect')));
+  assert.ok(launches.every(x=>x.includes('SmackProcessLabel=User')));
+  assert.ok(launches.every(x=>x.includes('systemctl stop vetro-input-event4.service')));
+  assert.ok(launches.every(x=>x.includes('|| (nohup /usr/bin/dotnet')));
+  // A unit helper that failed before authenticating is not retried through the unit.
+  bad=false;
+  const third=await bridge.start('Smart Control','observe',[]);assert.equal(third.policy.connected,true);
+  const last=commands[commands.length-1];
+  assert.ok(!last.includes('systemd-run'));
+  assert.ok(last.includes('(nohup /usr/bin/dotnet'));
+  bridge.stop();
   console.log('PASS physical input: exact devices, authenticated events, stop, reject invalid MAC');
  }finally{bridge.stop();if(socket)socket.destroy();}
 })().catch(e=>{console.error(e);process.exitCode=1});

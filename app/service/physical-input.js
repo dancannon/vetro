@@ -1,8 +1,11 @@
 'use strict';
 // Local authenticated evdev bridge. The optional integration supplies the native
 // helper; this feature never acquires privileges or uses the LAN remote API.
-var net = require('net'), crypto = require('crypto'), path = require('path');
+var net = require('net'), crypto = require('crypto'), path = require('path'), fs = require('fs');
 function quote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+// A helper that cannot start under the unit's policy (no AUTH) is retried once on the plain
+// detached path, exactly as before the unit existed. Per service process; a restart re-probes.
+var unitDisabled = false;
 function devices(text) {
     return String(text).split(/\n\s*\n/).map(function (block) {
         var n = /^N: Name="(.*)"$/m.exec(block), h = /^H: Handlers=(.*)$/m.exec(block);
@@ -18,7 +21,14 @@ function Bridge(execute, onEvent) {
     this.execute = execute; this.onEvent = onEvent; this.current = {mode:'off',connected:false};
     this.events = []; this.server = null; this.socket = null; this.generation = 0; this.lastError=null; this.cancel=null;
 }
+// /proc/bus/input/devices is world-readable, so the service reads it itself. A restore then
+// starts the helper without waiting for a root command, which matters right after a standby
+// when the root agent is still being reacquired.
 Bridge.prototype.inventory = function () {
+    try {
+        var text=fs.readFileSync('/proc/bus/input/devices','utf8');
+        if (/^N: Name=/m.test(text)) return Promise.resolve(devices(text));
+    } catch (e) {}
     return this.execute('cat /proc/bus/input/devices',10000).then(function(r){
         if (r.exit_code || r.timed_out) throw new Error('input inventory unavailable');
         return devices(r.stdout);
@@ -38,7 +48,7 @@ Bridge.prototype.start = function (device, mode, tokens) {
     if (mode!=='observe' && mode!=='filter') return Promise.reject(new Error('invalid input mode'));
     if (!Array.isArray(tokens) || tokens.some(function(t){return !/^\d{1,3}$/.test(t) || +t>767;})) return Promise.reject(new Error('invalid input codes'));
     if (mode==='filter' && !tokens.length) return Promise.reject(new Error('save a physical rule before enabling interception'));
-    var requestGeneration=self.generation;
+    var requestGeneration=self.generation, useUnit=!unitDisabled;
     return self.inventory().then(function(list){
         if(requestGeneration!==self.generation)throw new Error('input request cancelled');
         var selected=list.find(function(d){return (d.node===device || d.unique && d.name===device) && d.selectable;});
@@ -47,9 +57,15 @@ Bridge.prototype.start = function (device, mode, tokens) {
         self.current={mode:mode,device:selected.name,node:selected.node,connected:false,blocked:mode==='filter'?tokens:[]};
         return new Promise(function(resolve,reject){
             var settled=false, timer;
-            function fail(e){if(generation!==self.generation)return; self.lastError=e.message;if(!settled){settled=true;clearTimeout(timer);reject(e);}self.stop();}
+            function fail(e, launch){
+                if(generation!==self.generation)return;
+                // Only a helper that never authenticated after the launch command returned is
+                // evidence against the unit's policy. A launch command that timed out in the
+                // agent queue says nothing about the unit, so the next restore keeps trying it.
+                if(!settled&&useUnit&&!authenticated&&!launch)unitDisabled=true;
+                self.lastError=e.message;if(!settled){settled=true;clearTimeout(timer);reject(e);}self.stop();
+            }
             self.cancel=function(){if(!settled){settled=true;clearTimeout(timer);reject(new Error('input request cancelled'));}};
-            timer=setTimeout(function(){fail(new Error('native input helper did not connect'));},12000);
             self.server=net.createServer(function(socket){
                 if(self.socket){socket.destroy();return;} self.socket=socket;var buffer='';
                 socket.write('SAMSUNG-TV-REMOTE/1\t'+nonce.toString('hex')+'\n');
@@ -83,8 +99,25 @@ Bridge.prototype.start = function (device, mode, tokens) {
                 var token='/tmp/vetro-input-'+crypto.randomBytes(12).toString('hex')+'.token';
                 var helper=path.join(__dirname,'..','payload','SamsungTvRemoteInputAgent.dll');
                 var args=['127.0.0.1',String(self.server.address().port),token,selected.name+'@'+selected.node,'evdev','TV',mode,mode==='filter'?tokens.join(','):''];
-                var command='umask 077; printf %s '+quote(secret.toString('base64'))+' > '+quote(token)+'; nohup /usr/bin/dotnet '+quote(helper)+' '+args.map(quote).join(' ')+' </dev/null >/tmp/vetro-input.log 2>&1 &';
-                self.execute(command,5000).then(function(r){if(r.exit_code||r.timed_out)fail(new Error('input helper launch failed'));}).catch(fail);
+                // The helper must outlive a standby. Left as a child of the root agent it sits in
+                // sdbd's cgroup, which the TV stops at every standby, so every remapped key went
+                // native until root was reacquired. Its own transient unit (the dock uses the same
+                // mechanism) keeps the grab alive; the detached start stays as the fallback.
+                var run='/usr/bin/dotnet '+quote(helper)+' '+args.map(quote).join(' ');
+                var unit='vetro-input-'+selected.node.replace(/^.*\//,'').replace(/[^A-Za-z0-9_.-]/g,'');
+                var start='systemd-run --unit='+unit+' --collect -p KillSignal=SIGKILL -p SmackProcessLabel=User -p StandardOutput=null -p StandardError=null '+run;
+                var command='umask 077; printf %s '+quote(secret.toString('base64'))+' > '+quote(token)+'; '+
+                    (useUnit
+                        ? start+' >/dev/null 2>&1 || { systemctl stop '+unit+'.service >/dev/null 2>&1; '+start+' >/dev/null 2>&1; } || '+
+                          '(nohup '+run+' </dev/null >/tmp/vetro-input.log 2>&1 &)'
+                        : '(nohup '+run+' </dev/null >/tmp/vetro-input.log 2>&1 &)');
+                // The agent queue can be busy right after boot or a reconnect, so the launch
+                // command gets a longer deadline. The connect timer starts only once the command
+                // returned: the helper's own start time is what matters, not the queue delay.
+                self.execute(command,20000).then(function(r){
+                    if(r.exit_code||r.timed_out){fail(new Error('input helper launch failed'),true);return;}
+                    if(!settled)timer=setTimeout(function(){fail(new Error('native input helper did not connect'));},useUnit?15000:12000);
+                }).catch(function(e){fail(e,true);});
             });
         });
     });

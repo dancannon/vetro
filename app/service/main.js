@@ -520,7 +520,7 @@ var physical=new PhysicalInput(agentExecute,function(event){
     pendingActions++;
     actionQueue=actionQueue.then(function(){return runActions(actions);}).catch(function(e){inputError=e.message;inputPaused=true;physical.stop();}).finally(function(){pendingActions--;});
 });
-var inputObservers=[], inputPaused=false, inputRestoring=false;
+var inputObservers=[], inputPaused=false, inputRestoring=false, inputRetryAt=0;
 function inputPreference(){var p=remapStore.input;return p&&p.enabled===true&&typeof p.device==='string'?p:{enabled:false};}
 function saveInputPreference(preference){
     var previous=remapStore.input;remapStore.input=preference;
@@ -529,7 +529,7 @@ function saveInputPreference(preference){
 function inputTokens(){return remapStore.rules.filter(function(r){return r.enabled&&r.trigger.type==='physical';}).map(function(r){return r.trigger.value;});}
 function restoreInput(){
     var preference=inputPreference();
-    if(!preference.enabled||inputPaused||inputRestoring||physical.status().policy.connected||!platform.status().agent.connected||!inputTokens().length)return;
+    if(!preference.enabled||inputPaused||inputRestoring||Date.now()<inputRetryAt||physical.status().policy.connected||!platform.status().agent.connected||!inputTokens().length)return;
     inputRestoring=true;
     physical.inventory().then(function(list){
         if(inputPaused||inputPreference()!==preference)return;
@@ -539,7 +539,13 @@ function restoreInput(){
         var device=candidates.length===1?candidates[0]:keyed.length===1?keyed[0]:keyed.find(function(d){return d.node===preference.node;})||null;
         if(!device)throw new Error('Saved physical remote is unavailable');
         return physical.start(device.node,'filter',inputTokens());
-    }).then(function(){inputError=null;}).catch(function(e){inputError=e.message;}).finally(function(){inputRestoring=false;});
+    }).then(function(){inputError=null;inputRetryAt=0;}).catch(function(e){
+        inputError=e.message;
+        // Right after a standby the remote often has not reconnected yet. That is cheap to check
+        // again; a helper that failed to start is given longer so a persistent fault does not
+        // spawn dotnet processes in a loop.
+        inputRetryAt=Date.now()+(/No physical remote devices found/.test(e.message)?2000:5000);
+    }).finally(function(){inputRestoring=false;});
 }
 function stopInput(){inputObservers.forEach(function(b){b.stop();});inputObservers=[];physical.stop();}
 function inputSnapshot(){
@@ -659,8 +665,10 @@ platform.start();
 // instead of waiting for the next 10 s round.
 var dockAgentWas=false,dockTicks=0;
 var dockTimer=setInterval(function(){var up=!!platform.status().agent.connected,edge=up&&!dockAgentWas;dockAgentWas=up;if(edge||++dockTicks>=5){dockTicks=0;dock.supervise(up).catch(function(){});}},2000);if(dockTimer.unref)dockTimer.unref();
-// Retry after boot and helper disconnects, including late adapter availability.
-var inputRestoreTimer=setInterval(restoreInput,5000);if(inputRestoreTimer.unref)inputRestoreTimer.unref();
+// Retry after boot and helper disconnects, including late adapter availability. The tick is
+// cheap while connected (it returns at the connected check), and 1 s instead of 5 s removes
+// up to four seconds from the gap after a standby, when every mapped key goes native.
+var inputRestoreTimer=setInterval(restoreInput,1000);if(inputRestoreTimer.unref)inputRestoreTimer.unref();
 
 // MQTT bridge: publishes telemetry + Home Assistant discovery when a broker
 // is configured (persistent owner config, /tmp fallback). No-op without config.
