@@ -528,7 +528,7 @@ function handlePhysicalEvent(event){
 // One helper per physical remote. `physical` is the first device and keeps the old
 // single-device API for the status snapshot; extras cover every other remote.
 var physical=new PhysicalInput(agentExecute,handlePhysicalEvent), extraInputs=[];
-var inputObservers=[], inputPaused=false, inputRestoring=false;
+var inputObservers=[], inputPaused=false, inputRestoring=false, inputRetryAt=0;
 function inputPreference(){var p=remapStore.input;return p&&p.enabled===true?p:{enabled:false};}
 function saveInputPreference(preference){
     var previous=remapStore.input;remapStore.input=preference;
@@ -540,25 +540,32 @@ function inputTokens(){return remapStore.rules.filter(function(r){return r.enabl
 function selectableRemotes(list){
     return (list||[]).filter(function(d){return d.selectable;});
 }
-// Start one filter helper per selected remote. A failed remote does not stop the others.
+// Start one filter helper per selected remote, all at once: each helper is a dotnet cold start,
+// so serialising them added a helper start per remote to every restore. A failed remote does not
+// stop the others.
 function startFilter(devices, tokens){
     stopInput();
     var extra=devices.slice(1).map(function(d){var b=new PhysicalInput(agentExecute,handlePhysicalEvent);extraInputs.push(b);return {bridge:b,device:d};});
     var first=devices.length?physical.start(devices[0].node,'filter',tokens).catch(function(e){return {error:e.message};}):Promise.resolve(null);
-    return first.then(function(){
-        return Promise.all(extra.map(function(x){return x.bridge.start(x.device.node,'filter',tokens).catch(function(e){return {error:e.message};});}));
-    }).then(function(){return inputSnapshot();});
+    var rest=extra.map(function(x){return x.bridge.start(x.device.node,'filter',tokens).catch(function(e){return {error:e.message};});});
+    return Promise.all([first].concat(rest)).then(function(){return inputSnapshot();});
 }
 function restoreInput(){
     var preference=inputPreference();
-    if(!preference.enabled||inputPaused||inputRestoring||inputSnapshot().policy.connected||!platform.status().agent.connected||!inputTokens().length)return;
+    if(!preference.enabled||inputPaused||inputRestoring||Date.now()<inputRetryAt||inputSnapshot().policy.connected||!platform.status().agent.connected||!inputTokens().length)return;
     inputRestoring=true;
     physical.inventory().then(function(list){
         if(inputPaused||inputPreference()!==preference)return;
         var devices=selectableRemotes(list);
         if(!devices.length)throw new Error('No physical remote devices found');
         return startFilter(devices,inputTokens());
-    }).then(function(s){if(s&&!s.policy.connected)throw new Error('Input helpers unavailable');inputError=null;}).catch(function(e){inputError=e.message;}).finally(function(){inputRestoring=false;});
+    }).then(function(s){if(s&&!s.policy.connected)throw new Error('Input helpers unavailable');inputError=null;inputRetryAt=0;}).catch(function(e){
+        inputError=e.message;
+        // Right after a standby the remote often has not reconnected yet. That is cheap to check
+        // again; a helper that failed to start is given longer so a persistent fault does not
+        // spawn dotnet processes in a loop.
+        inputRetryAt=Date.now()+(/No physical remote devices found/.test(e.message)?2000:5000);
+    }).finally(function(){inputRestoring=false;});
 }
 function stopInput(){inputObservers.forEach(function(b){b.stop();});inputObservers=[];extraInputs.forEach(function(b){b.stop();});extraInputs=[];physical.stop();}
 function inputSnapshot(){
@@ -699,8 +706,10 @@ platform.start();
 // instead of waiting for the next 10 s round.
 var dockAgentWas=false,dockTicks=0;
 var dockTimer=setInterval(function(){var up=!!platform.status().agent.connected,edge=up&&!dockAgentWas;dockAgentWas=up;if(edge||++dockTicks>=5){dockTicks=0;dock.supervise(up).catch(function(){});}},2000);if(dockTimer.unref)dockTimer.unref();
-// Retry after boot and helper disconnects, including late adapter availability.
-var inputRestoreTimer=setInterval(restoreInput,5000);if(inputRestoreTimer.unref)inputRestoreTimer.unref();
+// Retry after boot and helper disconnects, including late adapter availability. The tick is
+// cheap while connected (it returns at the connected check), and 1 s instead of 5 s removes
+// up to four seconds from the gap after a standby, when every mapped key goes native.
+var inputRestoreTimer=setInterval(restoreInput,1000);if(inputRestoreTimer.unref)inputRestoreTimer.unref();
 
 // MQTT bridge: publishes telemetry + Home Assistant discovery when a broker
 // is configured (persistent owner config, /tmp fallback). No-op without config.
