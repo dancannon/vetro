@@ -552,6 +552,7 @@ namespace Launcher
                             case Command.Show: _perfWhy = "fifo-show"; ShowDock(); break;
                             case Command.Hide: _perfWhy = "fifo-hide"; HideDock(); break;
                             case Command.Toggle: _perfWhy = "fifo-toggle"; if (_ctl.IsActive) HideDock(); else ShowDock(); break;
+                            case Command.Inputs: _perfWhy = "fifo-inputs"; if (!_ctl.IsActive) ShowDock(); OpenInputs(); break;
                         }
                     }
                 }

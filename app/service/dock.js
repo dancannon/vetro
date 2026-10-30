@@ -315,15 +315,13 @@ Dock.prototype.refresh = function () {
     }).finally(function () { self.busy = false; });
 };
 
-// The dock has no inputs command on its fifo, so this shows the dock and presses Up, the key the
-// dock itself uses to open the inputs panel. Both steps are the dock's own tested behaviour.
+// The dock's fifo has an inputs command: it shows the window on the inputs page directly,
+// without the old show-then-Up flash and without injecting a key into the foreground app.
 Dock.prototype.openInputsScript = function () {
     return [
         'p=$(cat ' + PID_FILE + ' 2>/dev/null)',
         'if [ -z "$p" ] || ! tr "\\0" " " < /proc/$p/cmdline 2>/dev/null | grep -q ' + DLL + ' || [ ! -p ' + FIFO + ' ]; then echo "The Vetro launcher is not running" >&2; exit 1; fi',
-        "printf 'show\\n' > " + FIFO,
-        'sleep 0.8',
-        '/usr/bin/input_keyevent Up'
+        "printf 'inputs\\n' > " + FIFO
     ].join('\n');
 };
 // Launcher off or stopped is a normal "nothing to open" answer, not a reason to stop the whole
