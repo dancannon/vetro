@@ -44,7 +44,7 @@ function fixture(options) {
         if (script.includes('setsid nohup')) { tv.started = script; if (!tv.neverStarts) tv.running = true; return {exit_code: 0, stdout: 'started\n'}; }
         if (script.includes('kill -9') && !script.includes('echo "dock=')) { tv.running = false; tv.stopped = (tv.stopped || 0) + 1; return {exit_code: 0, stdout: ''}; }
         if (script.includes('echo "dock=')) return {exit_code: 0, stdout: (tv.running ? 'dock=4242' : 'dock=') + '\nhome=' + (tv.csfs ? 1 : 0) + '\nlog:\n' + tv.log + '\n'};
-        if (script.includes('/home/owner/tvlauncher.fifo') && script.includes('/usr/bin/input_keyevent Up')) { tv.inputsOpened = (tv.inputsOpened || 0) + 1; tv.inputsScript = script; return {exit_code: 0, stdout: ''}; }
+        if (script.includes('/home/owner/tvlauncher.fifo') && script.includes("printf 'inputs\\n'")) { tv.inputsOpened = (tv.inputsOpened || 0) + 1; tv.inputsScript = script; return {exit_code: 0, stdout: ''}; }
         throw new Error('unexpected command: ' + script);
     };
     const dock = new Dock({execute: execute, dir: dir, stateFile: path.join(tmp, 'state.json'), appsFile: path.join(tmp, 'apps.tsv'),
@@ -260,7 +260,7 @@ function fixture(options) {
     await f.dock.enable();
     await f.dock.openInputs();
     assert.equal(f.tv.inputsOpened, 1);
-    assert.ok(f.tv.inputsScript.includes("printf 'show\\n'") && f.tv.inputsScript.indexOf('sleep 0.8') < f.tv.inputsScript.indexOf('/usr/bin/input_keyevent Up'), 'show first, then the dock\'s own Up key');
+    assert.ok(f.tv.inputsScript.includes("printf 'inputs\\n'") && !f.tv.inputsScript.includes('/usr/bin/input_keyevent') && !f.tv.inputsScript.includes('sleep 0.8'), 'the inputs fifo command opens the panel directly');
     f.tv.running = false;
     await assert.rejects(f.dock.openInputs(), e => e.nonFatal === true && /not running/.test(e.message));
 
