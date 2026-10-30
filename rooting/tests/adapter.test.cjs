@@ -16,6 +16,10 @@ async function main() {
   provider.start(); provider.start(); assert.equal(provider.status().running,true);
   provider.stop(); assert.equal(provider.status().running,false);
   let timers=0; context.setTimeout = () => {timers++;}; context.scheduleRelaunch(); assert.equal(timers,0);
+  // A unit-started agent must keep the archive chain's root capabilities, not just uid 0.
+  assert.equal(context.hasRootCaps('0000003fffffffff'), true);
+  assert.equal(context.hasRootCaps('0000000000000000'), false);
+  assert.equal(context.hasRootCaps(''), false);
   const commands=require('../service/debloat-commands.js');
   assert.throws(() => commands.disableCommand(['com.samsung.tv.coba.adagent.service']),/Smart Hub/);
   assert.ok(commands.enableCommand(['com.samsung.tv.coba.adagent']));

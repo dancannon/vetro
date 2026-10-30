@@ -47,13 +47,29 @@ function ensureDir(p) {
 // Start the agent with detached standard streams so the archive launcher
 // returns and releases SDB command processing. setsid() in the agent alone
 // does not release the waiting tar/archive parents. Paths are baked in once.
+//
+// Optional: run the agent in a transient systemd unit of its own (the dock uses the same
+// mechanism). As a plain child of the archive launcher it lives in sdbd's cgroup, which the TV
+// stops at every standby, so root is lost and reacquired from this side and the remapped remote
+// stays native until that finishes. A unit keeps the agent and everything it starts across a
+// standby. This is opt-in: create /opt/usr/home/owner/share/vetro-agent-unit (or
+// /tmp/vetro-agent-unit) and restart the service. The direct start, exactly as before, is the
+// default and the fallback: the marker is absent, systemd-run is missing or refuses, or the agent
+// reports a SMACK label/capability set other than the archive chain's (platform.js then writes
+// /tmp/vetro-agent-direct so later launches in this boot stay direct).
 function buildLaunchScript(agentPort) {
     var staging = STAGE + '/' + pkg;
+    var command = '/usr/bin/dotnet ' + staging + '/SamsungTvRootAgent.dll ' +
+        '127.0.0.1 ' + agentPort + ' ' + staging + '/root-agent.token ' + staging;
     return '#!/bin/sh\n' +
-        '/usr/bin/dotnet ' + staging + '/SamsungTvRootAgent.dll ' +
-        '127.0.0.1 ' + agentPort + ' ' +
-        staging + '/root-agent.token ' +
-        staging + ' </dev/null >' + staging + '/root-agent.log 2>&1 &\n';
+        'AGENT="' + command + '"\n' +
+        'if { [ -e /opt/usr/home/owner/share/vetro-agent-unit ] || [ -e /tmp/vetro-agent-unit ]; } ' +
+        '&& [ ! -e /tmp/vetro-agent-direct ] && systemd-run --unit=vetro-root --collect ' +
+        '-p KillSignal=SIGKILL -p StandardOutput=null -p StandardError=null ' +
+        '-p SmackProcessLabel=User /bin/sh -c "$AGENT" >/dev/null 2>&1; then\n' +
+        '  exit 0\n' +
+        'fi\n' +
+        '$AGENT </dev/null >' + staging + '/root-agent.log 2>&1 &\n';
 }
 
 // Every service start stages a new archive-root-<id> folder and a signed archive in on-demand/, and nothing
@@ -148,6 +164,39 @@ var launchClient = null;   // temporary SDB connection during launch
 var launching = false;
 var relaunchTimer = null;
 var launchGen = 0;        // invalidates stale retry timers
+// The TV stops sdbd at every standby, which drops the agent. The first retry therefore has to
+// be quick: at wake sdbd may need a moment to listen, and a fixed 8 s wait put every remapped
+// key back on the TV's own handling. The delay doubles only while sdbd stays away.
+var RELAUNCH_FIRST_MS = 500, RELAUNCH_MAX_MS = 8000;
+var relaunchDelay = RELAUNCH_FIRST_MS;
+// The launch script can start the agent in a systemd unit so it survives a standby. Off unless a
+// marker asks for it: the root agent is the archive chain, and the project's root is deliberately
+// volatile, so the unit path is an experiment to test on one TV, not the default. The direct start
+// is also selected for the rest of the boot after a failed unit start (see useDirectLaunch).
+var AGENT_UNIT_MARKERS = ['/opt/usr/home/owner/share/vetro-agent-unit', '/tmp/vetro-agent-unit'];
+var DIRECT_MARKER = '/tmp/vetro-agent-direct';
+function agentUnitRequested() {
+    for (var i = 0; i < AGENT_UNIT_MARKERS.length; i++) {
+        try { if (fs.existsSync(AGENT_UNIT_MARKERS[i])) return true; } catch (e) {}
+    }
+    return false;
+}
+var systemdAgent = agentUnitRequested();
+// CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, SETGID, SETUID, SYS_ADMIN: the archive chain and the
+// commands it runs need these, and a unit that drops them would look connected but fail later.
+var REQUIRED_CAPS = [0, 1, 2, 6, 7, 21];
+function hasRootCaps(hex) {
+    var mask = parseInt(hex, 16);
+    if (!/^[0-9a-f]+$/i.test(String(hex || '')) || !isFinite(mask)) return false;
+    for (var i = 0; i < REQUIRED_CAPS.length; i++) if (!(mask & (1 << REQUIRED_CAPS[i]))) return false;
+    return true;
+}
+function useDirectLaunch() {
+    if (!systemdAgent) return;
+    systemdAgent = false;
+    state.agentLaunch = 'direct';
+    try { fs.writeFileSync(DIRECT_MARKER, '1\n'); } catch (e) {}
+}
 
 function pushAttempt(entry) {
     state.attempts.push(entry);
@@ -157,11 +206,23 @@ function pushAttempt(entry) {
 function startAgent() {
     if (state.running) return;
     state.running = true;
+    state.agentLaunch = systemdAgent ? 'unit-preferred' : 'direct';
     agentServer = new RootAgentServer({
         secret: secret,
         onConnect: function (conn) {
             if (!state.running) { conn._socket.destroy(); return; }
+            // The archive chain gives the agent the User SMACK label and root's capabilities.
+            // A unit-started agent with anything less runs under a policy this project has not
+            // verified, so drop it and use the direct start for the rest of the boot.
+            if (systemdAgent && (conn.identity.smack !== 'User' || !hasRootCaps(conn.identity.cap_eff))) {
+                useDirectLaunch();
+                if (agentServer) agentServer.note('agent label "' + (conn.identity.smack || '?') + '" caps ' + (conn.identity.cap_eff || '?') + '; using the direct launch');
+                try { conn._socket.destroy(); } catch (e) {}
+                scheduleRelaunch();
+                return;
+            }
             if (relaunchTimer) { clearTimeout(relaunchTimer); relaunchTimer = null; }
+            relaunchDelay = RELAUNCH_FIRST_MS;
             agentConnected = true;
             state.agent = {
                 connected: true,
@@ -196,10 +257,12 @@ function startAgent() {
 
 function scheduleRelaunch() {
     if (!state.running || relaunchTimer) return;
+    var delay = relaunchDelay;
+    relaunchDelay = Math.min(relaunchDelay * 2, RELAUNCH_MAX_MS);
     relaunchTimer = setTimeout(function () {
         relaunchTimer = null;
         relaunch();
-    }, 8000);
+    }, delay);
 }
 
 function relaunch() {
@@ -256,7 +319,11 @@ function relaunch() {
             // if the agent has not connected within 30s, retry — but only if
             // this launch is still the current one (no newer relaunch started)
             setTimeout(function () {
-                if (gen === launchGen && !agentConnected && !launching) relaunch();
+                if (gen !== launchGen || agentConnected || launching) return;
+                // systemd-run may return success and the unit still fail before the agent
+                // connects. Give the direct start the next attempt rather than repeating it.
+                useDirectLaunch();
+                relaunch();
             }, 30000);
         })
         .catch(function (e) {
