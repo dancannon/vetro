@@ -7,6 +7,7 @@
 // and the saved labels and port names are used instead.
 
 var path = require('path');
+var catalog = require('./dock-catalog');
 
 var SLUGS = ['in-tv', 'in-hdmi1', 'in-hdmi2', 'in-hdmi3', 'in-hdmi4'];
 // Samsung's SourceType: TV is 0, HDMI 1-4 are 13-16.
@@ -14,6 +15,7 @@ var PORT = {'in-tv': 0, 'in-hdmi1': 13, 'in-hdmi2': 14, 'in-hdmi3': 15, 'in-hdmi
 var DEFAULT_LABEL = {'in-tv': 'TV', 'in-hdmi1': 'HDMI 1', 'in-hdmi2': 'HDMI 2', 'in-hdmi3': 'HDMI 3', 'in-hdmi4': 'HDMI 4'};
 var TYPE_ICONS = ['tv', 'hdmi', 'pc', 'console', 'streaming', 'soundbar', 'disc', 'camera'];
 var MAX_LABEL = 24;
+var MAX_NATIVE_LABEL = 40;
 var NAME_KEY = 'db/source-list/source-name';
 var STATE_KEY = 'db/source-service/detection_state_HDMI';
 var SEPARATOR = '##vetro##';
@@ -34,7 +36,8 @@ function defaults() {
 
 // null, or 1 to 24 characters after trimming.
 function cleanLabel(value) {
-    var text = value == null ? '' : String(value).trim();
+    if (value != null && typeof value !== 'string') throw new Error('Invalid source label');
+    var text = value == null ? '' : value.trim();
     if (!text) return null;
     if (/[\u0000-\u001f\u007f]/.test(text)) throw new Error('Source labels cannot contain control characters');
     if (text.length > MAX_LABEL) throw new Error('Source labels are limited to ' + MAX_LABEL + ' characters');
@@ -101,12 +104,13 @@ function parseDetection(text) {
 }
 
 // The TV's name for a port: Samsung's edit when it is not the port default, else the name detected over
-// CEC, else ''. Control characters would break the generated file, so they become spaces.
+// CEC, else ''. Control characters would break the generated file, so they become spaces, and the dock
+// drops a source whose label is over 40 characters, so the name is cut to that.
 function tvName(slug, detection) {
     if (slug === 'in-tv') return 'TV';
     var entry = detection.available ? detection.names[PORT[slug]] : null;
     if (!entry) return '';
-    function clean(value) { return String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim(); }
+    function clean(value) { return String(value == null ? '' : value).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, MAX_NATIVE_LABEL); }
     var edit = clean(entry.edit);
     return edit && edit !== DEFAULT_LABEL[slug] ? edit : clean(entry.detected);
 }
@@ -140,11 +144,15 @@ function rows(list, detection) {
 }
 
 // The dock's inputs file: visible rows in saved order. The fourth field is the native parser's unused
-// fallback app id; the fifth is the icon's absolute path inside this package.
+// fallback app id; the fifth is the icon's absolute path inside this package. The dock skips a whole line
+// whose icon path is outside the places it accepts (the same whitelist as the app list), so the column is
+// left empty then and the dock uses its own icon for the port.
 function tsv(list, iconDir) {
     var lines = ['# the inputs panel (Up on the dock). Generated from vetro-dock-sources.json; do not edit.'];
     list.forEach(function (row) {
-        if (!row.hidden) lines.push([row.slug, row.label, 'source:' + row.source, '', path.join(iconDir, iconFile(row.icon))].join('\t'));
+        if (row.hidden) return;
+        var icon = path.join(iconDir, iconFile(row.icon));
+        lines.push([row.slug, row.label, 'source:' + row.source, '', catalog.iconPathOk(icon) ? icon : ''].join('\t'));
     });
     return lines.join('\n') + '\n';
 }

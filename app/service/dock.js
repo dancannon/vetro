@@ -172,17 +172,19 @@ Dock.prototype.status = function (options) {
 
 Dock.prototype.statusNow = function () {
     var self = this, state = this.readState(), list = this.sourceState();
-    // Detection is re-read after a few seconds: the Launcher tab shows what the TV reports now.
-    return this.readDetection().then(function (detection) {
-        var base = {installed: self.installed(), enabled: state.enabled, since: state.since, busy: self.busy,
+    // Detection is re-read after a few seconds: the Launcher tab shows what the TV reports now. It runs beside
+    // the probe so a slow TV read does not add to the probe's wait.
+    var probe = this.probe().then(function (p) {
+        return {running: p.running, pid: p.pid, samsungHome: p.samsungHome, log: p.log};
+    }).catch(function (e) {
+        return {running: null, pid: null, samsungHome: null, log: '', probeError: e.message};
+    });
+    return Promise.all([this.readDetection(), probe]).then(function (both) {
+        var detection = both[0];
+        return Object.assign({installed: self.installed(), enabled: state.enabled, since: state.since, busy: self.busy,
             error: self.lastError, failures: self.failures, apps: self.lastCatalog, fixTizenTube: state.fixTizenTube, autorunSwitchedOff: state.autorunWas === 1,
             entries: self.entries(), inputs: sources.rows(list, detection),
-            detection: {available: detection.available, error: detection.error}};
-        return self.probe().then(function (p) {
-            return Object.assign(base, {running: p.running, pid: p.pid, samsungHome: p.samsungHome, log: p.log});
-        }).catch(function (e) {
-            return Object.assign(base, {running: null, pid: null, samsungHome: null, log: '', probeError: e.message});
-        });
+            detection: {available: detection.available, error: detection.error}}, both[1]);
     });
 };
 
@@ -319,7 +321,7 @@ Dock.prototype.refresh = function () {
 
 // The dock's own `inputs` command shows the dock and opens the panel, wherever the apps page's focus was.
 Dock.prototype.openInputsScript = function () {
-    return '[ -p ' + FIFO + " ] && printf 'inputs\\n' > " + FIFO;
+    return '[ -p ' + FIFO + " ] || { echo no-fifo; exit 0; }\nprintf 'inputs\\n' > " + FIFO;
 };
 // Launcher off or stopped is a normal "nothing to open" answer, not a reason to stop the whole
 // physical remote: the caller keeps intercepting the other mapped keys.
@@ -334,7 +336,7 @@ Dock.prototype.openInputs = function () {
     return this.probe().then(function (p) {
         if (!p.running) return Promise.reject(skipped('The Vetro launcher is not running'));
         return self.execute(wrap(self.openInputsScript()), 8000).then(function (r) {
-            check(r, 'Open inputs');
+            if (check(r, 'Open inputs').trim() === 'no-fifo') throw skipped('The Vetro launcher is not accepting commands');
             return {ok: true, panel: 'inputs'};
         });
     });

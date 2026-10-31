@@ -43,7 +43,7 @@ function fixture(options) {
         if (script.includes('setsid nohup')) { tv.started = script; if (!tv.neverStarts) tv.running = true; return {exit_code: 0, stdout: 'started\n'}; }
         if (script.includes('kill -9') && !script.includes('echo "dock=')) { tv.running = false; tv.stopped = (tv.stopped || 0) + 1; return {exit_code: 0, stdout: ''}; }
         if (script.includes('echo "dock=')) return {exit_code: 0, stdout: (tv.running ? 'dock=4242' : 'dock=') + '\nhome=' + (tv.csfs ? 1 : 0) + '\nlog:\n' + tv.log + '\n'};
-        if (script.includes('/home/owner/tvlauncher.fifo') && script.includes("printf 'inputs\\n'")) { tv.inputsOpened = (tv.inputsOpened || 0) + 1; tv.inputsScript = script; return {exit_code: 0, stdout: ''}; }
+        if (script.includes('/home/owner/tvlauncher.fifo') && script.includes("printf 'inputs\\n'")) { tv.inputsOpened = (tv.inputsOpened || 0) + 1; tv.inputsScript = script; return {exit_code: 0, stdout: tv.noFifo ? 'no-fifo\n' : ''}; }
         throw new Error('unexpected command: ' + script);
     };
     const dock = new Dock({execute: execute, dir: dir, stateFile: path.join(tmp, 'state.json'), appsFile: path.join(tmp, 'apps.tsv'),
@@ -151,7 +151,8 @@ function fixture(options) {
         [['TV', 'tv', true], ['PlayStation 5', 'console', true], ['HDMI 1', 'hdmi', false], ['Living room Fire TV', 'streaming', true], ['HDMI 4', 'hdmi', false]]);
     let inputsTsv = fs.readFileSync(path.join(f.tmp, 'inputs.tsv'), 'utf8');
     assert.ok(!inputsTsv.includes('Old label'), 'the old file is replaced');
-    assert.ok(inputsTsv.includes('in-hdmi2\tLiving room Fire TV\tsource:14\t\t' + path.join(f.tmp, 'dock', 'res', 'icons', 'input-streaming.png')), inputsTsv);
+    // The test folder is outside the dock's icon roots, so the icon column is left empty rather than losing the row.
+    assert.ok(inputsTsv.includes('in-hdmi2\tLiving room Fire TV\tsource:14\t\t\n'), inputsTsv);
 
     // Saving a new order with a hidden row writes both files and restarts the running dock, reading the TV once.
     await assert.rejects(f.dock.saveSources(rows.slice(1)), /all five/);
@@ -218,6 +219,8 @@ function fixture(options) {
     await f.dock.enable();
     await f.dock.openInputs();
     assert.equal(f.tv.inputsOpened, 1, 'the dock\'s own inputs command, not a key press');
+    f.tv.noFifo = true;
+    await assert.rejects(f.dock.openInputs(), e => e.nonFatal === true && /not accepting/.test(e.message), 'a missing command pipe is skipped, not fatal');
     f.tv.running = false;
     await assert.rejects(f.dock.openInputs(), e => e.nonFatal === true && /not running/.test(e.message));
 

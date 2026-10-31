@@ -78,13 +78,22 @@ assert.ok(offline.every(r => r.present === null), 'no "no device" claim when det
 // The generated file: visible rows in saved order, source numbers and absolute icon paths.
 const order = list([{slug: 'in-hdmi1', hidden: true}]);
 order.unshift(order.splice(3, 1)[0]);
-assert.equal(sources.tsv(sources.rows(order, det), '/pkg/icons'), [
+assert.equal(sources.tsv(sources.rows(order, det), '/usr/apps/vetrotvapp/res/icons'), [
     '# the inputs panel (Up on the dock). Generated from vetro-dock-sources.json; do not edit.',
-    'in-hdmi3\tPlayStation 5\tsource:15\t\t/pkg/icons/input-console.png',
-    'in-tv\tTV\tsource:0\t\t/pkg/icons/in-tv.png',
-    'in-hdmi2\tAmazon Fire TV stick\tsource:14\t\t/pkg/icons/input-streaming.png',
-    'in-hdmi4\tHDMI 4\tsource:16\t\t/pkg/icons/input-hdmi.png',
+    'in-hdmi3\tPlayStation 5\tsource:15\t\t/usr/apps/vetrotvapp/res/icons/input-console.png',
+    'in-tv\tTV\tsource:0\t\t/usr/apps/vetrotvapp/res/icons/in-tv.png',
+    'in-hdmi2\tAmazon Fire TV stick\tsource:14\t\t/usr/apps/vetrotvapp/res/icons/input-streaming.png',
+    'in-hdmi4\tHDMI 4\tsource:16\t\t/usr/apps/vetrotvapp/res/icons/input-hdmi.png',
     ''
 ].join('\n'));
+
+// The dock skips a whole line with an icon path outside its roots (an owner install, say): keep the row, leave the icon out.
+assert.equal(sources.tsv(sources.rows(list(), det), '/opt/usr/home/owner/apps_rw/vetro/res/icons').split('\n')[1],
+    'in-tv\tTV\tsource:0\t\t');
+
+// Names the dock would reject are cut or refused here.
+const long = sources.rows(list(), sources.parseDetection(detection([{DetectedName: 'x'.repeat(60), SourceType: 13}])));
+assert.equal(long[1].label.length, 40, 'a TV-reported name is cut to the dock\'s 40');
+[{}, [1, 2], 5].forEach(label => assert.throws(() => sources.normalize(list([{slug: 'in-hdmi1', label}])), /Invalid source label/));
 
 console.log('PASS dock sources: validation, detection, rows and the generated file');
