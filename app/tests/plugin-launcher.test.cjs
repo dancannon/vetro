@@ -18,7 +18,6 @@ const dock = {
     refresh: () => { log.push('refresh'); return Promise.resolve({ ok: true }); },
     setNoMotion: on => { log.push('motion:' + on); return Promise.resolve({ noMotion: on }); },
     setCaptions: mode => { log.push('captions:' + mode); return Promise.resolve({ captions: mode }); },
-    setMarkCurrent: on => { log.push('mark:' + on); return Promise.resolve({ markCurrent: on }); },
     setFixTizenTube: on => { log.push('fix:' + on); return Promise.resolve({ fix: on }); },
     setListOption: (key, on) => { log.push('list:' + key + ':' + on); return Promise.resolve({}); },
     iconFile: slug => slug === 'known' ? Buffer.from('PNG') : null,
@@ -45,7 +44,7 @@ const post = (body) => { const r = res(); host.dispatch('launcher', { method: 'P
     const st = get('status'); await nextTick(1);
     assert.deepEqual(st.body, { enabled: false, preview: true });
     for (const [body, entry] of [['{"action":"enable"}', 'enable'], ['{"action":"disable"}', 'disable'], ['{"action":"refresh"}', 'refresh'], ['{"action":"fixTizenTube","on":true}', 'fix:true'], ['{"action":"noMotion","on":true}', 'motion:true'], ['{"action":"noMotion","on":false}', 'motion:false'],
-        ['{"action":"showHomeSources","on":true}', 'list:showHomeSources:true'], ['{"action":"showAllApps","on":false}', 'list:showAllApps:false'], ['{"action":"captions","value":"apps"}', 'captions:apps'], ['{"action":"markCurrent","on":true}', 'mark:true'], ['{"action":"markCurrent","on":false}', 'mark:false']]) {
+        ['{"action":"showHomeSources","on":true}', 'list:showHomeSources:true'], ['{"action":"showAllApps","on":false}', 'list:showAllApps:false'], ['{"action":"captions","value":"apps"}', 'captions:apps']]) {
         const before = log.length;
         post(body); await nextTick(1);
         assert.equal(log[before], entry);
