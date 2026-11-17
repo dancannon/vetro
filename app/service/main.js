@@ -898,7 +898,21 @@ var server = http.createServer(function (req, res) {
     // A sandboxed plugin page carries no sign-in cookie; its URL holds a session token the plugin host checks.
     if (PLUGIN_SESSION_API_RE.test(url)) return plugins.handle(req, res, url, serveJson, readBody);
     if (auth.gate(req, res, url, {open: platform.status().mode === 'app-only', onPair: function () { showPairingCode(0); }})) return;
-    if (url === '/plugins' || url.indexOf('/plugins/') === 0) return plugins.handle(req, res, url, serveJson, readBody);
+    if (url === '/plugins' || url.indexOf('/plugins/') === 0) {
+        // A packaged TV page (opaque origin, from the TV itself: the gate above already decided that) manages
+        // Shards through these routes, so it needs the header to read the answer. A browser on the LAN is
+        // same-origin here and never gets one; its opaque-origin requests were refused above.
+        if (req.headers && auth.pageOrigin(req.headers.origin)) {
+            res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+            res.setHeader('Vary', 'Origin');
+            if (req.method === 'OPTIONS') {
+                res.writeHead(204, {'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type'});
+                return res.end();
+            }
+        }
+        return plugins.handle(req, res, url, serveJson, readBody);
+    }
     if (url === '/diagnostics/download') {
         if (req.method !== 'GET') return serveJson(res, {error:'Use GET to download diagnostics'}, 405);
         return downloadDiagnostics(res, COMPONENTS_QUERY_RE.test(req.url || ''));
