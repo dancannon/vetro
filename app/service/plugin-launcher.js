@@ -9,7 +9,7 @@
 // client changes. The same routes are also reachable as /plugins/launcher/api/<sub>.
 //
 //   GET  api/status   the launcher's state and the preview of its list      (was GET /dock)
-//   POST api/action   {action: enable|disable|refresh|fixTizenTube|noMotion|showHomeSources|useSourceImages|saveSources|refreshSources|enableCustom|disableCustom, on, appId, sources}     (was POST /dock)
+//   POST api/action   {action: enable|disable|refresh|fixTizenTube|noMotion|showHomeSources|useSourceImages|showAllApps|saveSources|refreshSources|enableCustom|disableCustom, on, appId, sources}     (was POST /dock)
 //   GET  api/icon     ?slug=<tile>  the PNG of a tile                       (was GET /dock/icon)
 //   GET  api/source-icon  ?icon=<type>  the PNG of a packaged source icon     (was GET /dock/source-icon)
 //
@@ -63,7 +63,7 @@ function definition(dock, options) {
                 if (p.action === 'refresh') return dock.refresh();
                 if (p.action === 'fixTizenTube') return dock.setFixTizenTube(p.on);
                 if (p.action === 'noMotion') return dock.setNoMotion(p.on);
-                if (p.action === 'showHomeSources' || p.action === 'useSourceImages') return dock.setSourceOption(p.action, p.on);
+                if (p.action === 'showHomeSources' || p.action === 'useSourceImages' || p.action === 'showAllApps') return dock.setListOption(p.action, p.on);
                 if (p.action === 'saveSources') return dock.saveSources(p.sources);
                 if (p.action === 'refreshSources') return dock.refreshSources();
                 if (p.action === 'enableCustom') return dock.enableCustom(p.appId);

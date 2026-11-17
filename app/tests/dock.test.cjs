@@ -224,13 +224,13 @@ function fixture(options) {
     // the packaged icon of a row left on Auto when the switch is on, but only while the file is there.
     const cache = {HDMI2: {EditName: '', DetectedName: 'Fire TV', IconPath: '/opt/usr/apps/x/fire.png'}, HDMI3: {DetectedName: 'PS5', IconPath: '/opt/usr/apps/x/gone.png'}};
     f = fixture({sourceCache: cache, existing: ['/opt/usr/apps/x/fire.png']});
-    await f.dock.setSourceOption('useSourceImages', true);
+    await f.dock.setListOption('useSourceImages', true);
     inputsTsv = fs.readFileSync(path.join(f.tmp, 'inputs.tsv'), 'utf8');
     assert.ok(inputsTsv.includes('in-hdmi2\tHDMI 2 - Fire TV\tsource:14\t\t/opt/usr/apps/x/fire.png\n'), inputsTsv);
     assert.ok(inputsTsv.includes('in-hdmi3\tHDMI 3 - PS5\tsource:15\t\t\n'), 'artwork that is not on the TV is dropped, not passed to the dock');
     await f.dock.saveSources(rows.map(r => r.slug === 'in-hdmi2' ? Object.assign({}, r, {label: null, icon: 'pc'}) : r));
     assert.ok(fs.readFileSync(path.join(f.tmp, 'inputs.tsv'), 'utf8').includes('in-hdmi2\tHDMI 2 - Fire TV\tsource:14\t\t\n'), 'a chosen icon wins over Samsung\'s artwork');
-    await f.dock.setSourceOption('useSourceImages', false);
+    await f.dock.setListOption('useSourceImages', false);
     assert.ok(!fs.readFileSync(path.join(f.tmp, 'inputs.tsv'), 'utf8').includes('fire.png'), 'the switch off: no Samsung artwork');
 
     // The Launcher's own list fills the icon column with packaged icons; that is not Samsung artwork to migrate on.
@@ -386,11 +386,16 @@ function fixture(options) {
     assert.equal(f.dock.readState().showHomeSources,false);
     await f.dock.writeCatalog();
     assert.equal(JSON.parse(fs.readFileSync(f.dock.stateFile)).showHomeSources,false,'fresh defaults persist before creating generated lists');
-    await assert.rejects(f.dock.setSourceOption('other',true),/Invalid source option/);
-    await assert.rejects(f.dock.setSourceOption('showHomeSources','yes'),/Invalid source option/);
-    await f.dock.setSourceOption('showHomeSources',true);
-    await f.dock.setSourceOption('showHomeSources',false);
+    await assert.rejects(f.dock.setListOption('other',true),/Invalid launcher list option/);
+    await assert.rejects(f.dock.setListOption('showHomeSources','yes'),/Invalid launcher list option/);
+    await f.dock.setListOption('showHomeSources',true);
+    await f.dock.setListOption('showHomeSources',false);
     assert.equal(f.dock.readState().showHomeSources,false);
+    assert.equal(f.dock.readState().showAllApps,true,'all apps are shown by default, as before this switch');
+    await f.dock.setListOption('showAllApps',false);
+    assert.equal(f.dock.readState().showAllApps,false);
+    await f.dock.setListOption('showAllApps',true);
+    assert.equal(f.dock.readState().showAllApps,true);
     await f.dock.enable();
     const previousCatalog=fs.readFileSync(f.dock.appsFile,'utf8'), exec=f.dock.execute;
     let failOnce=true;
@@ -400,7 +405,7 @@ function fixture(options) {
         }
         return exec(cmd);
     };
-    await assert.rejects(f.dock.setSourceOption('showHomeSources',true),/read failed/);
+    await assert.rejects(f.dock.setListOption('showHomeSources',true),/read failed/);
     assert.equal(f.dock.readState().showHomeSources,false,'failed changes restore persisted state');
     assert.equal(fs.readFileSync(f.dock.appsFile,'utf8'),previousCatalog,'failed changes restore the generated catalog');
     assert.equal(f.tv.running,true,'previous launcher relaunched after failed change');
@@ -414,12 +419,12 @@ function fixture(options) {
     // Both choices are independent and remain explicit across restarts.
     f=fixture();
     assert.equal(f.dock.readState().useSourceImages,false);
-    await f.dock.setSourceOption('useSourceImages',true);
+    await f.dock.setListOption('useSourceImages',true);
     assert.equal(f.dock.readState().showHomeSources,false);
-    await f.dock.setSourceOption('showHomeSources',true);
-    await f.dock.setSourceOption('useSourceImages',false);
+    await f.dock.setListOption('showHomeSources',true);
+    await f.dock.setListOption('useSourceImages',false);
     assert.equal(f.dock.readState().showHomeSources,true);
-    await f.dock.setSourceOption('showHomeSources',false);
+    await f.dock.setListOption('showHomeSources',false);
     const reloaded=new Dock({execute:f.dock.execute,dir:f.dock.dir,stateFile:f.dock.stateFile,appsFile:f.dock.appsFile,inputsFile:f.dock.inputsFile,sourcesFile:f.dock.sourcesFile});
     assert.equal(reloaded.readState().showHomeSources,false);
     assert.equal(reloaded.readState().useSourceImages,false);
@@ -432,12 +437,12 @@ function fixture(options) {
     assert.equal(JSON.parse(fs.readFileSync(legacyArt.stateFile)).useSourceImages,true);
 
     f=fixture(); fs.writeFileSync(f.dock.stateFile,JSON.stringify({showHomeSources:false,sourceOptionOriginal:{showHomeSources:true}}));
-    await f.dock.setSourceOption('showHomeSources',true);
+    await f.dock.setListOption('showHomeSources',true);
     assert.equal(f.dock.readState().showHomeSources,true);
     assert.ok(!('sourceOptionOriginal' in JSON.parse(fs.readFileSync(f.dock.stateFile))),'obsolete original-choice metadata is removed when settings are saved');
 
     f=fixture(); fs.writeFileSync(f.dock.stateFile,'broken existing state');
-    await assert.rejects(f.dock.setSourceOption('showHomeSources',true),/Cannot read launcher preferences/);
+    await assert.rejects(f.dock.setListOption('showHomeSources',true),/Cannot read launcher preferences/);
     await assert.rejects(f.dock.writeCatalog(),/Cannot read launcher preferences/);
     assert.equal(fs.readFileSync(f.dock.stateFile,'utf8'),'broken existing state','migration never overwrites malformed state');
 
